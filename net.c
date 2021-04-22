@@ -19,10 +19,7 @@ int cli_sd = -1;
 static bool nread(int fd, int len, uint8_t *buf) {
   int n = 0;
   while (n < len){
-    int r = read(fd, buf, len - n);
-    if (r <= 0){
-      return false;
-    }
+    int r = read(fd, buf + n, len - n);
     n += r;
   }
   return true;
@@ -33,10 +30,7 @@ static bool nread(int fd, int len, uint8_t *buf) {
 static bool nwrite(int fd, int len, uint8_t *buf) {
   int n = 0;
   while (n < len){
-    int r = write(fd, buf, len - n);
-    if (r <= 0){
-      return false;
-    }
+    int r = write(fd, buf + n, len - n);
     n += r;
   }
   return true;
@@ -81,40 +75,35 @@ static bool recv_packet(int fd, uint32_t *op, uint16_t *ret, uint8_t *block) {
 static bool send_packet(int sd, uint32_t op, uint8_t *block) {
   /*if it is a write block then increase the length of the packet*/
   jbod_cmd_t opCode = op >> 26;
+  uint16_t len = HEADER_LEN;
+  if(opCode == JBOD_WRITE_BLOCK){
+    len += JBOD_BLOCK_SIZE;
+  }
   uint8_t header[HEADER_LEN];
+  uint8_t buf[HEADER_LEN + JBOD_BLOCK_SIZE];
   int offset = 0;
   uint16_t ret;
-  uint16_t len;
-  if(nwrite(sd, HEADER_LEN, header) == true){
-    len = htons(len);
-    op = htonl(op);
-    ret = htons(ret);
-    memcpy(&len, header + offset, sizeof(len));
-    offset += sizeof(len);
-    memcpy(op, header + offset, sizeof(op));
-    offset += sizeof(op);
-    memcpy(ret, header + offset, sizeof(ret));
-    if(op == JBOD_WRITE_BLOCK){
-      nwrite(sd, HEADER_LEN + JBOD_BLOCK_SIZE, block);
+  uint16_t new_len = htons(len);
+  uint32_t new_op = htonl(op);
+  memcpy(buf + offset, &new_len, sizeof(new_len));
+  offset += sizeof(new_len);
+  memcpy(buf + offset, &new_op, sizeof(new_op));
+  offset += sizeof(new_op);
+  offset += sizeof(ret);
+  if(opCode == JBOD_WRITE_BLOCK){
+    memcpy(buf + offset, block, JBOD_BLOCK_SIZE);
+    if(nwrite(sd, HEADER_LEN + JBOD_BLOCK_SIZE, buf) == true){
       return true;
     }
-    if(op == JBOD_SEEK_TO_BLOCK || JBOD_SEEK_TO_DISK){
-      return true;
-    }
-    if (len == HEADER_LEN){
-      return true;
-    }
-    if(len == HEADER_LEN + JBOD_BLOCK_SIZE){
-      return true;
-    }
-    else{
-      return false;
-    }
-  }
-  else{
     return false;
   }
-  return 0;
+  else{
+    /*write the first 8bits of the buf*/
+    if(nwrite(sd, HEADER_LEN, buf) == true){
+      return true;
+    }
+    return false;
+  }
 }
 
 /* attempts to connect to server and set the global cli_sd variable to the
@@ -128,7 +117,7 @@ bool jbod_connect(const char *ip, uint16_t port) {
     return false;
   }
   sock_id = socket(AF_INET, SOCK_STREAM, 0);
-  if (connect(sock_id, (const struct sockaddr *)&addr, sizeof(addr)) == -1){
+  if (connect(sock_id, (const struct sockaddr *)&addr, sizeof(struct sockaddr)) == -1){
     return false;
   }
   else{
@@ -149,15 +138,16 @@ int jbod_client_operation(uint32_t op, uint8_t *block) {
   /* new variable for op and ret*/
   uint16_t ret;
   uint32_t op1;
-  if(cli_sd != -1){
-    err();
+  if(cli_sd == -1){
+    printf("client didnt connect to server");
   }
   if(!send_packet(cli_sd, op, block)){
-    
+    printf("packet failed to send");
   }
-  if(!recv_packet(cli_sd, op1, ret, block)){
-
+  if(!recv_packet(cli_sd, &op1, &ret, block)){
+    printf("packet failed to send ");
   }
+  return ret;
   
 }
 
